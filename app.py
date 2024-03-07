@@ -10,7 +10,7 @@ def map_sql_type_to_index(possible_types, sql_type):
     # Check for each condition and return the appropriate index
     if 'int' in sql_type_lower:
         return possible_types.index("INT")
-    elif any(keyword in sql_type_lower for keyword in ['decimal', 'float', 'numeric']):        
+    elif any(keyword in sql_type_lower for keyword in ['decimal', 'float', 'numeric','money']):        
         return possible_types.index("MONEY")
     elif 'timestamp' in sql_type_lower:
         return possible_types.index("DATE")
@@ -19,6 +19,32 @@ def map_sql_type_to_index(possible_types, sql_type):
     else:
         # Default to 0 if no match is found
         return 0
+
+def parse_view_definition(view_definition):
+    data = json.loads(view_definition)
+    columns = []  
+    table_name = data.get("name")
+
+    for component in data.get("components", []):
+        # Process dimensions
+        for dim in component.get("dimensions", []):
+            columns.append({
+                "column_name": dim.get("id"),
+                "column_type": dim.get("type"),
+                "display_name": dim.get("header_text"),
+                "dim_or_met": "Dimension"
+            })
+
+        # Process metrics
+        for metric in component.get("metrics", []):
+            columns.append({
+                "column_name": metric.get("id"),
+                "column_type": metric.get("type"),
+                "display_name": metric.get("header_text"),
+                "dim_or_met": "Metric"
+            })
+
+    return columns,table_name,data
 
 def assume_dimension_or_metric(column_name,column_type):
     metric_types = ['int', 'float', 'decimal', 'numeric', 'money']
@@ -37,41 +63,29 @@ def convert_name_to_display_name(column_name):
     return display_name
 
 def parse_table_definition_postgres(table_def):
-    #match table name
     match = re.search(r'CREATE TABLE\s+(?:\S+\.)?(\w+)\s*\(', table_def, re.IGNORECASE)
     if match:
         table_name = match.group(1)  # The table name is captured here
     else:
         table_name = "unknown_table"  # Default or error handling
-    
-    # Extract column definitions after the "CREATE TABLE" statement, ignoring constraints and modifiers
+
     pattern = re.compile(r'\b"?(\w+)"?\s+(\w+)\b[^,]*')
-    
     # Find all matches starting from the first opening parenthesis to avoid matching the table name
     start_pos = table_def.find('(')
     if start_pos == -1:
         return []  # Return an empty list if no column definitions are found
-
-    # Extract the substring that likely contains the column definitions
     column_definitions = table_def[start_pos:]
-    
     matches = pattern.findall(column_definitions)
 
-    # Construct a list of dictionaries for each column, excluding entries that are clearly not column definitions
     columns = []
     column_names=[]
     for match in matches:
         column_name, column_type = match
-        # Exclude common SQL keywords that might still be captured despite the regex refinement
         if column_name.upper() in ['PRIMARY', 'FOREIGN', 'UNIQUE', 'CHECK', 'NOT', 'NULL','CONSTRAINT']:
             continue
         columns.append({"column_name": column_name, "column_type": column_type,"display_name":convert_name_to_display_name(column_name),"dim_or_met":assume_dimension_or_metric(column_name,column_type)})
         column_names.append(column_name)
     
-    #tg = st.checkbox('show extracted columns and types')
-    #if tg:
-        #st.write(columns)
-    #os.write(1,columns)
     return columns,table_name
 
 # Function for SQL Server
@@ -81,6 +95,7 @@ def parse_table_definition_sqlserver(query):
 
 # Function for PostgreSQL
 def create_config(columns,name):
+    st.write("---")
     st.markdown("**Configuration**")
     view_name = st.text_input("View Name:", name)
 
@@ -99,7 +114,6 @@ def create_config(columns,name):
         col1, col2, col3, col4 = st.columns(4)    
         with col1:
             display_name = st.text_input("", value=row['column_name'], key='cn'+str(index), disabled=True)
-            #st.text(row['column_name'])
         with col2:
             type_options = ["VARCHAR", "INT", "DATE", "MONEY"]
             col_type = st.selectbox("", type_options, key='sb'+str(index),index= map_sql_type_to_index(type_options,row['column_type']))
@@ -112,13 +126,21 @@ def create_config(columns,name):
             df.at[index, 'dim_or_met'] = dim_or_met
 
     st.write("---")
-    # Button to save the configuration
-    #if st.button("Save Configuration"):
-        # Convert DataFrame to JSON to save the configuration
     return df.to_dict(orient="records"),view_name
-    #create_json_result(updated_columns,name)    
 
-def create_json_result(columns,name):
+def parse_table_definition():
+    table_definition = st.text_area("Enter your table definition:", height=150)
+    database_option = st.selectbox("Choose your database:", ("PostgreSQL",""))
+    columns,table_name = None,None
+
+    if table_definition:
+        if database_option == "SQL Server":
+            columns,table_name = parse_table_definition_sqlserver(table_definition)
+        if database_option == "PostgreSQL":
+            columns,table_name = parse_table_definition_postgres(table_definition)
+    return columns,table_name
+
+def create_json_result(columns,name,previous_view_definition):
     dimensions = []
     metrics = []
     for column in columns:
@@ -159,55 +181,55 @@ def create_json_result(columns,name):
             }
             metrics.append(metric)
 
-
-    json_object = {
-        "name": name,
-        "filters": [],
-        "components": [
-            {
-                "name": name + "_grid",
-                "type": "grid",
-                "orders": [],
-                "filters": [],
-                "metrics": metrics,
-                "hasnotes": False,
-                "drilldown": "",
-                "dimensions": dimensions,
-                "data_source": name,
-                "description": "",
-                "drillthrough": "",
-                "has_checkbox": False
-            }
-        ],
-        "drilldowns": [],
-        "description": "",
-        "display_props": {
-            "tab": "analysis",
+    if previous_view_definition:
+        previous_view_definition['components'][0]['metrics'] = metrics
+        previous_view_definition['components'][0]['dimensions'] = dimensions
+        json_object = previous_view_definition            
+    else:
+        json_object = {
             "name": name,
-            "order": 99,
-            "show_on_dashboard": True
-        },
-        "drillthroughs": []
-    }
-
-    #json_output = json.dumps(json_object, indent=4)
-
+            "filters": [],
+            "components": [
+                {
+                    "name": name + "_grid",
+                    "type": "grid",
+                    "orders": [],
+                    "filters": [],
+                    "metrics": metrics,
+                    "hasnotes": False,
+                    "drilldown": "",
+                    "dimensions": dimensions,
+                    "data_source": name,
+                    "description": "",
+                    "drillthrough": "",
+                    "has_checkbox": False
+                }
+            ],
+            "drilldowns": [],
+            "description": "",
+            "display_props": {
+                "tab": "analysis",
+                "name": name,
+                "order": 99,
+                "show_on_dashboard": True
+            },
+            "drillthroughs": []
+        }
     return json_object
 
-# Streamlit UI
-st.title("MxB cloud view generator")
-table_definition = st.text_area("Enter your table definition:", height=150)
-database_option = st.selectbox("Choose your database:", ("PostgreSQL",""))
-st.write('---')
-
-if table_definition:
-    if database_option == "SQL Server":
-        columns,table_name = parse_table_definition_sqlserver(table_definition)
-    if database_option == "PostgreSQL":
-        columns,table_name = parse_table_definition_postgres(table_definition)
-    
-    updated_columns,view_name = create_config(columns,table_name)
-    
-    result = create_json_result(updated_columns,view_name)
-
-    st.text_area("Json view def:", value=json.dumps(result, indent=4), height=250, key="result")
+if __name__ == "__main__":
+    st.title("MxB cloud view generator")
+    input_option = st.selectbox("What do you want to do?", ("convert SQL definition into view","Edit MxB view"))
+    if input_option=="convert SQL definition into view":
+        columns,table_name = parse_table_definition()        
+        if columns:
+            updated_columns,view_name = create_config(columns,table_name)
+            result = create_json_result(updated_columns,view_name,None)    
+            st.text_area("Json view def:", value=json.dumps(result, indent=4), height=250, key="result")
+    elif input_option=="Edit MxB view":
+        view_definition = st.text_area("Enter your view json definition:", height=150)
+        if view_definition:
+            columns,table_name,previous_view_definition = parse_view_definition(view_definition)
+            updated_columns,view_name = create_config(columns,table_name)
+            result = create_json_result(updated_columns,view_name,previous_view_definition)   
+            st.text_area("Json view def:", value=json.dumps(result, indent=4), height=250, key="result")
