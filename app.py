@@ -225,11 +225,14 @@ if __name__ == "__main__":
         if columns:
             updated_columns,view_name = create_config(columns,table_name)
             result = create_json_result(updated_columns,view_name,None)    
-            st.text_area("Json view def:", value=json.dumps(result, indent=4), height=250, key="result")
+            st.write("**view definition**")
+            st.write(result)
     elif input_option=="Edit MxB view":
         view_definition = st.text_area("Enter your view json definition:", height=150)
         if view_definition:
             columns,table_name,previous_view_definition = parse_view_definition(view_definition)
             updated_columns,view_name = create_config(columns,table_name)
             result = create_json_result(updated_columns,view_name,previous_view_definition)   
-            st.text_area("Json view def:", value=json.dumps(result, indent=4), height=250, key="result")
+            st.write("**view definition**")
+            st.write(result)
+            
