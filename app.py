@@ -20,6 +20,21 @@ def map_sql_type_to_index(possible_types, sql_type):
         # Default to 0 if no match is found
         return 0
 
+def assume_dimension_or_metric(column_name,column_type):
+    metric_types = ['int', 'float', 'decimal', 'numeric', 'money']
+    sql_type_lower = column_type.lower()
+
+    if 'id' not in column_name.lower() and any(metric in sql_type_lower for metric in metric_types):
+        return 'Metric'
+    else:
+        return 'Dimension'
+    
+def convert_name_to_display_name(column_name):
+    display_name = column_name.replace('_', ' ')
+    display_name = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', display_name)
+    display_name = display_name.title()
+    
+    return display_name
 
 def parse_table_definition_postgres(table_def):
     #match table name
@@ -50,7 +65,7 @@ def parse_table_definition_postgres(table_def):
         # Exclude common SQL keywords that might still be captured despite the regex refinement
         if column_name.upper() in ['PRIMARY', 'FOREIGN', 'UNIQUE', 'CHECK', 'NOT', 'NULL','CONSTRAINT']:
             continue
-        columns.append({"column_name": column_name, "column_type": column_type,"display_name":column_name,"dim_or_met":"Dimension"})
+        columns.append({"column_name": column_name, "column_type": column_type,"display_name":convert_name_to_display_name(column_name),"dim_or_met":assume_dimension_or_metric(column_name,column_type)})
         column_names.append(column_name)
     
     #tg = st.checkbox('show extracted columns and types')
@@ -93,7 +108,7 @@ def create_config(columns,name):
             display_name = st.text_input("", value=row['display_name'], key='ti'+str(index))
             df.at[index, 'display_name'] = display_name  # Update the display name
         with col4:
-            dim_or_met = st.selectbox("", ["Dimension", "Metric", "Ignore Column"], key='dom'+str(index))
+            dim_or_met = st.selectbox("", ["Dimension", "Metric", "Ignore Column"], key='dom'+str(index),index=(0 if row['dim_or_met'] == "Dimension" else 1))
             df.at[index, 'dim_or_met'] = dim_or_met
 
     st.write("---")
